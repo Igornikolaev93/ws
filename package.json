@@ -1,0 +1,22 @@
+{
+  "name": "timer-app",
+  "version": "1.0.0",
+  "description": "Timer application with PostgreSQL",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "init-db": "psql -U postgres -d timer_app -f init.sql"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "nunjucks": "^3.2.4",
+    "nanoid": "^5.0.0",
+    "cookie-parser": "^1.4.6",
+    "pg": "^8.11.0",
+    "bcrypt": "^5.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  }
+}
