@@ -1,4 +1,4 @@
-/*global UIkit, Vue */
+/*global UIkit, Vue, USER_ID */
 
 (() => {
   const notification = (config) =>
@@ -41,18 +41,10 @@
       desc: "",
       activeTimers: [],
       oldTimers: [],
+      ws: null,
+      userId: USER_ID,
     },
     methods: {
-      fetchActiveTimers() {
-        fetchJson("/api/timers?isActive=true").then((activeTimers) => {
-          this.activeTimers = activeTimers;
-        });
-      },
-      fetchOldTimers() {
-        fetchJson("/api/timers?isActive=false").then((oldTimers) => {
-          this.oldTimers = oldTimers;
-        });
-      },
       createTimer() {
         const description = this.desc;
         this.desc = "";
@@ -62,18 +54,28 @@
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ description }),
-        }).then(({ id }) => {
-          info(`Created new timer "${description}" [${id}]`);
-          this.fetchActiveTimers();
+        }).then((newTimer) => {
+          if (newTimer) {
+            info(`Created new timer "${description}" [${newTimer.id}]`);
+          }
         });
       },
       stopTimer(id) {
         fetchJson(`/api/timers/${id}/stop`, {
           method: "post",
-        }).then(() => {
-          info(`Stopped the timer [${id}]`);
-          this.fetchActiveTimers();
-          this.fetchOldTimers();
+        }).then((stoppedTimer) => {
+            if(stoppedTimer) {
+                info(`Stopped the timer [${id}]`);
+            }
+        });
+      },
+      deleteTimer(id) {
+        fetchJson(`/api/timers/${id}`, {
+          method: 'delete',
+        }).then((res) => {
+            if(res){
+                info(`Deleted the timer [${id}]`);
+            }
         });
       },
       formatTime(ts) {
@@ -90,13 +92,44 @@
           .map((x) => (x < 10 ? "0" : "") + x)
           .join(":");
       },
+      connect() {
+        const socket = new WebSocket(location.origin.replace(/^http/, 'ws') + '/ws');
+
+        socket.addEventListener('open', () => {
+          console.log('WebSocket connected');
+          this.ws = socket;
+        });
+
+        socket.addEventListener('message', (event) => {
+          const data = JSON.parse(event.data);
+
+          if (data.type === 'all_timers') {
+            this.activeTimers = data.payload.filter(t => t.isActive);
+            this.oldTimers = data.payload.filter(t => !t.isActive);
+          } else if (data.type === 'active_timers') {
+            this.activeTimers = data.payload;
+          } else if (data.message) {
+            info(data.message);
+          }
+        });
+
+        socket.addEventListener('close', () => {
+          console.log('WebSocket disconnected. Reconnecting...');
+          this.ws = null;
+          setTimeout(() => {
+            this.connect();
+          }, 1000);
+        });
+
+        socket.addEventListener('error', (error) => {
+          console.error('WebSocket Error:', error);
+          this.ws = null;
+          socket.close();
+        });
+      }
     },
     created() {
-      this.fetchActiveTimers();
-      setInterval(() => {
-        this.fetchActiveTimers();
-      }, 1000);
-      this.fetchOldTimers();
+      this.connect();
     },
   });
 })();

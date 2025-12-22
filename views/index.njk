@@ -22,7 +22,7 @@
         <p>
           <strong>
             User: [[ user.username ]].
-            <a href="/logout">Log out</a>
+            <form style="display: inline;" method="POST" action="/logout"><button class="uk-button uk-button-link">Log out</button></form>
           </strong>
         </p>
         <p>
@@ -39,10 +39,11 @@
           <h2>Active timers:</h2>
           <ul class="uk-list">
             <li v-for="t in activeTimers" :key="t.id">
-              <span uk-icon="close" v-on:click="stopTimer(t.id)"></span>
               <span class="uk-text-primary mono">{{ formatDuration(t.progress) }}</span>
               <strong class="uk-text-emphasis">{{ t.description }}</strong>
               <span class="uk-text-muted mono">{{ formatTime(t.start) }}</span>
+              <a href="#" uk-icon="icon: close" class="uk-margin-small-left" v-on:click.prevent="stopTimer(t.id)"></a>
+              <a href="#" uk-icon="icon: trash" class="uk-margin-small-left" v-on:click.prevent="deleteTimer(t.id)"></a>
             </li>
           </ul>
         </div>
@@ -55,6 +56,7 @@
               (<span class="uk-text-muted mono">{{ formatTime(t.start) }}</span>
               &ndash;
               <span class="uk-text-muted mono">{{ formatTime(t.end) }}</span>)
+              <a href="#" uk-icon="icon: trash" class="uk-margin-small-left" v-on:click.prevent="deleteTimer(t.id)"></a>
             </li>
           </ul>
         </div>
@@ -64,6 +66,9 @@
       <script src="https://cdn.jsdelivr.net/npm/uikit@3.5.4/dist/js/uikit-icons.min.js"></script>
       <script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
 
+      <script>
+        window.USER_ID = "[[ user._id ]]";
+      </script>
       <script src="/main.js"></script>
     [% else %]
       <section class="uk-container uk-margin-top uk-margin-bottom">
