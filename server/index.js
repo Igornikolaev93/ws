@@ -1,14 +1,21 @@
 // Импорт необходимых модулей
 const express = require("express");
+const http = require('http');
+const { WebSocketServer } = require('ws');
 const nunjucks = require("nunjucks");
-const { nanoid } = require("nanoid");
 const cookieParser = require("cookie-parser");
 const pool = require("./db");
-const bcrypt = require("bcrypt"); 
+const bcrypt = require("bcrypt");
 
+// Динамический импорт nanoid
+let nanoid;
+import('nanoid').then(module => {
+  nanoid = module.nanoid;
+});
 
 const app = express();
-
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
 
 nunjucks.configure("views", {
   autoescape: true,
@@ -62,6 +69,7 @@ app.use(async (req, res, next) => {
           _id: result.rows[0].id,
           username: result.rows[0].username
         };
+        req.userToken = sessionId;
         
         
         await pool.query(
@@ -77,6 +85,13 @@ app.use(async (req, res, next) => {
   next();
 });
 
+app.get("/", (req, res) => {
+    if (req.user) {
+        res.render("index", { user: req.user, userToken: req.userToken });
+    } else {
+        res.redirect("/login");
+    }
+});
 
 app.get("/login", (req, res) => {
   if (req.user) {
@@ -215,6 +230,88 @@ app.get("/api/user", (req, res) => {
   }
 });
 
+const getTimers = async (userId) => {
+  const result = await pool.query(
+    `SELECT id, description, start_time, end_time, is_active, created_at 
+     FROM timers 
+     WHERE user_id = $1 
+     ORDER BY created_at DESC, start_time DESC`,
+    [userId]
+  );
+  
+  return result.rows.map(row => {
+    const timer = {
+      id: row.id,
+      description: row.description,
+      start: row.start_time.getTime(),
+      isActive: row.is_active,
+      userId: userId,
+      createdAt: row.created_at.getTime()
+    };
+    
+    if (row.end_time) {
+      timer.end = row.end_time.getTime();
+      timer.duration = timer.end - timer.start;
+    }
+    
+    if (row.is_active) {
+      timer.progress = Date.now() - timer.start;
+    }
+    
+    return timer;
+  });
+}
+
+wss.on('connection', (ws, req) => {
+  ws.on('message', async (message) => {
+    try {
+      const { sessionId } = JSON.parse(message);
+      if (sessionId) {
+        const result = await pool.query(
+          `SELECT s.user_id, s.expires_at, u.id, u.username 
+           FROM sessions s 
+           JOIN users u ON s.user_id = u.id 
+           WHERE s.session_id = $1 AND s.expires_at > NOW()`,
+          [sessionId]
+        );
+        
+        if (result.rows.length > 0) {
+          ws.userId = result.rows[0].id;
+          const timers = await getTimers(ws.userId);
+          ws.send(JSON.stringify({ type: 'all_timers', payload: timers }));
+        }
+      }
+    } catch (error) {
+      console.error('WebSocket message error:', error);
+    }
+  });
+});
+
+const broadcastTimers = async (userId) => {
+  const timers = await getTimers(userId);
+  for (const client of wss.clients) {
+    if (client.userId === userId) {
+      client.send(JSON.stringify({ type: 'all_timers', payload: timers }));
+    }
+  }
+};
+
+const broadcastActiveTimers = async () => {
+  const userIds = [...new Set([...wss.clients].map(client => client.userId))];
+  for (const userId of userIds) {
+    if (userId) {
+      const timers = await getTimers(userId);
+      const activeTimers = timers.filter(timer => timer.isActive);
+      for (const client of wss.clients) {
+        if (client.userId === userId) {
+          client.send(JSON.stringify({ type: 'active_timers', payload: activeTimers }));
+        }
+      }
+    }
+  }
+};
+
+setInterval(broadcastActiveTimers, 1000);
 
 app.get("/api/timers", async (req, res) => {
   if (!req.user) {
@@ -222,36 +319,7 @@ app.get("/api/timers", async (req, res) => {
   }
 
   try {
-    const result = await pool.query(
-      `SELECT id, description, start_time, end_time, is_active, created_at 
-       FROM timers 
-       WHERE user_id = $1 
-       ORDER BY created_at DESC, start_time DESC`,
-      [req.user._id]
-    );
-    
-    const timers = result.rows.map(row => {
-      const timer = {
-        id: row.id,
-        description: row.description,
-        start: row.start_time.getTime(),
-        isActive: row.is_active,
-        userId: req.user._id,
-        createdAt: row.created_at.getTime()
-      };
-      
-      if (row.end_time) {
-        timer.end = row.end_time.getTime();
-        timer.duration = timer.end - timer.start;
-      }
-      
-      if (row.is_active) {
-        timer.progress = Date.now() - timer.start;
-      }
-      
-      return timer;
-    });
-    
+    const timers = await getTimers(req.user._id);
     res.json(timers);
   } catch (error) {
     console.error('Get timers error:', error);
@@ -292,6 +360,7 @@ app.post("/api/timers", async (req, res) => {
     };
     
     res.json(newTimer);
+    await broadcastTimers(req.user._id);
   } catch (error) {
     console.error('Create timer error:', error);
     res.status(500).json({ error: "Failed to create timer" });
@@ -331,6 +400,7 @@ app.post("/api/timers/:id/stop", async (req, res) => {
     };
 
     res.json(timer);
+    await broadcastTimers(req.user._id);
   } catch (error) {
     console.error('Stop timer error:', error);
     res.status(500).json({ error: "Failed to stop timer" });
@@ -356,6 +426,7 @@ app.delete("/api/timers/:id", async (req, res) => {
     }
 
     res.json({ message: "Timer deleted successfully" });
+    await broadcastTimers(req.user._id);
   } catch (error) {
     console.error('Delete timer error:', error);
     res.status(500).json({ error: "Failed to delete timer" });
@@ -376,7 +447,7 @@ const cleanupExpiredSessions = async () => {
 setInterval(cleanupExpiredSessions, 24 * 60 * 60 * 1000);
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`Server listening on http://localhost:${port}`);
   // Первоначальная очистка при запуске
   cleanupExpiredSessions();
