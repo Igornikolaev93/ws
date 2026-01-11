@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Timers</title>
+</head>
+<body>
+  <div id="app">
+    <h1>Timers</h1>
+    <div v-if="!authenticated">
+      <h2>Login</h2>
+      <form @submit.prevent="login">
+        <input v-model="username" placeholder="Username">
+        <input v-model="password" type="password" placeholder="Password">
+        <button type="submit">Login</button>
+      </form>
+      <h2>Signup</h2>
+      <form @submit.prevent="signup">
+        <input v-model="newUsername" placeholder="Username">
+        <input v-model="newPassword" type="password" placeholder="Password">
+        <button type="submit">Signup</button>
+      </form>
+    </div>
+    <div v-if="authenticated">
+      <button @click="logout">Logout</button>
+      <h2>New Timer</h2>
+      <form @submit.prevent="createTimer">
+        <input v-model="description" placeholder="Description">
+        <button type="submit">Start</button>
+      </form>
+      <h2>Active Timers</h2>
+      <ul>
+        <li v-for="timer in activeTimers" :key="timer.id">
+          {{ timer.description }} - {{ formatDuration(timer.progress) }}
+          <button @click="stopTimer(timer.id)">Stop</button>
+        </li>
+      </ul>
+      <h2>Old Timers</h2>
+      <ul>
+        <li v-for="timer in oldTimers" :key="timer.id">
+          {{ timer.description }} - {{ formatDuration(timer.duration) }}
+          <button @click="deleteTimer(timer.id)">Delete</button>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/vue@2"></script>
+  <script>
+    const app = new Vue({
+      el: '#app',
+      data: {
+        authenticated: false,
+        username: '',
+        password: '',
+        newUsername: '',
+        newPassword: '',
+        description: '',
+        activeTimers: [],
+        oldTimers: [],
+        ws: null,
+        sessionId: null,
+      },
+      created() {
+        this.sessionId = localStorage.getItem('sessionId');
+        if (this.sessionId) {
+          this.authenticated = true;
+          this.connectWebSocket();
+        }
+      },
+      methods: {
+        connectWebSocket() {
+          this.ws = new WebSocket(`ws://${window.location.host}`);
+
+          this.ws.onopen = () => {
+            this.ws.send(JSON.stringify({ type: 'auth', sessionId: this.sessionId }));
+          };
+
+          this.ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'all_timers') {
+              this.activeTimers = data.payload.filter(t => t.isActive);
+              this.oldTimers = data.payload.filter(t => !t.isActive);
+            }
+            if (data.type === 'active_timers') {
+              this.activeTimers = data.payload;
+            }
+          };
+
+          this.ws.onclose = () => {
+            console.log('WebSocket connection closed');
+          };
+
+          this.ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+          };
+        },
+        async login() {
+          try {
+            const response = await fetch('/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: this.username, password: this.password }),
+            });
+            const data = await response.json();
+            if (data.sessionId) {
+              this.sessionId = data.sessionId;
+              localStorage.setItem('sessionId', this.sessionId);
+              this.authenticated = true;
+              this.connectWebSocket();
+            } else {
+              alert(data.error);
+            }
+          } catch (error) {
+            console.error('Login error:', error);
+          }
+        },
+        async signup() {
+          try {
+            const response = await fetch('/signup', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: this.newUsername, password: this.newPassword }),
+            });
+            const data = await response.json();
+            if (data.sessionId) {
+              this.sessionId = data.sessionId;
+              localStorage.setItem('sessionId', this.sessionId);
+              this.authenticated = true;
+              this.connectWebSocket();
+            } else {
+              alert(data.error);
+            }
+          } catch (error) {
+            console.error('Signup error:', error);
+          }
+        },
+        async logout() {
+          try {
+            await fetch('/logout', {
+              method: 'POST',
+              headers: { 'x-session-id': this.sessionId },
+            });
+            localStorage.removeItem('sessionId');
+            this.authenticated = false;
+            this.activeTimers = [];
+            this.oldTimers = [];
+            this.ws.close();
+          } catch (error) {
+            console.error('Logout error:', error);
+          }
+        },
+        async createTimer() {
+          try {
+            await fetch('/api/timers', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-session-id': this.sessionId,
+              },
+              body: JSON.stringify({ description: this.description }),
+            });
+            this.description = '';
+          } catch (error) {
+            console.error('Create timer error:', error);
+          }
+        },
+        async stopTimer(id) {
+          try {
+            await fetch(`/api/timers/${id}/stop`, {
+              method: 'POST',
+              headers: { 'x-session-id': this.sessionId },
+            });
+          } catch (error) {
+            console.error('Stop timer error:', error);
+          }
+        },
+        async deleteTimer(id) {
+          try {
+            await fetch(`/api/timers/${id}`,
+              {
+                method: 'DELETE',
+                headers: { 'x-session-id': this.sessionId },
+              });
+          } catch (error) {
+            console.error('Delete timer error:', error);
+          }
+        },
+        formatDuration(ms) {
+          const seconds = Math.floor(ms / 1000);
+          const hours = Math.floor(seconds / 3600);
+          const minutes = Math.floor((seconds % 3600) / 60);
+          const secs = seconds % 60;
+
+          if (hours > 0) {
+            return `${hours}h ${minutes}m ${secs}s`;
+          } else if (minutes > 0) {
+            return `${minutes}m ${secs}s`;
+          } else {
+            return `${secs}s`;
+          }
+        },
+      },
+    });
+  </script>
+</body>
+</html>
